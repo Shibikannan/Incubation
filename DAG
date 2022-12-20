@@ -42,7 +42,7 @@ def landing_to_raw():
         'Key': str(path_url_landing[3])
         }
         bucket = s3.Bucket(path_url_raw[2])
-#         bucket.copy(copy_source,str(i+'/'+i+'.parquet'))
+        bucket.copy(copy_source,str(i+'/'+i+'.parquet'))
         print(path_url_landing[2],path_url_landing[3],path_url_raw[2],path_url_raw[3])
         try:
             rzs3, rzpath = fs.FileSystem.from_uri(config_json[i]['destination']['data-location'])
