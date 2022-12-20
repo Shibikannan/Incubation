@@ -1,0 +1,209 @@
+from datetime import datetime
+import pandas as pd
+from airflow import DAG
+from airflow.operators.python_operator import PythonOperator
+import boto3
+import requests
+import json
+import pyarrow.fs as fs
+import pyarrow.dataset as ds
+import decimal
+
+
+region_name='ap-southeast-1'
+
+def config():
+    s3 = boto3.resource('s3')
+    obj = s3.Object('shibi-lz-07', "configuration/app-config.json")
+    try:
+        file_content = obj.get()['Body'].read().decode('utf-8')
+    except:
+        raise FileNotFoundError('App-config file not found in this location')
+    json_data = json.loads(file_content)
+    return json_data
+def landing_to_raw():
+    config_json=config()
+    s3 = boto3.resource('s3')
+    path_list=['actives','viewership']
+    count=2
+    for i in path_list:
+        path_url_landing=config_json[i]["source"]["data-location"].split('/')
+        # ["s3:","" , "shibi-lz-07" ,  "Actives.parquet.snappy"]
+        try:
+            s3.Object(path_url_landing[2],path_url_landing[3]).load()
+        except:
+            count-=1
+            continue
+        exist_list.append(i)
+        path_url_raw = config_json[i]["destination"]["data-location"].split('/')
+        #  ["s3:","","shibi-rz-07","i"]
+        copy_source = {
+        'Bucket': path_url_landing[2],
+        'Key': str(path_url_landing[3])
+        }
+        bucket = s3.Bucket(path_url_raw[2])
+#         bucket.copy(copy_source,str(i+'/'+i+'.parquet'))
+        print(path_url_landing[2],path_url_landing[3],path_url_raw[2],path_url_raw[3])
+        try:
+            rzs3, rzpath = fs.FileSystem.from_uri(config_json[i]['destination']['data-location'])
+            ds.dataset(rzpath, filesystem=rzs3, format='parquet')
+        except:
+            print(i)
+            raise FileNotFoundError('file not moved to raw zone')
+
+def security_group_id(group_name, region_name):
+    ec2 = boto3.client('ec2', region_name=region_name)
+    response = ec2.describe_security_groups(GroupNames=[group_name])
+    return response['SecurityGroups'][0]['GroupId']
+
+def getSparkConfig():
+    s3 = boto3.resource('s3')
+    obj = s3.Object('shibi-lz-07', "configuration/spark-config.json")
+    spark_config = obj.get()['Body'].read().decode('utf-8')
+    print(spark_config)
+    json_data = json.loads(spark_config)
+    return json_data
+def waiting_for_cluster(cluster_id):
+    emr = boto3.client('emr', region_name=region_name)
+    emr.get_waiter('cluster_running').wait(ClusterId=cluster_id)
+def createEmrCluster():
+    emr = boto3.client('emr', region_name=region_name)
+    master_security_group_id = security_group_id('ElasticMapReduce-master', region_name=region_name)
+    slave_security_group_id = master_security_group_id
+    cluster_response = emr.run_job_flow(
+    Name= 'Shibi_Cluster',
+            ReleaseLabel= 'emr-6.2.1',
+            Configurations= getSparkConfig(),
+            Instances={
+            'InstanceGroups': [
+                    {
+                        'Name': "Master nodes",
+                        'Market': 'ON_DEMAND',
+                        'InstanceRole': 'MASTER',
+                        'InstanceType': 'm5.xlarge',
+                        'InstanceCount': 1
+                    }
+                ],
+            'KeepJobFlowAliveWhenNoSteps': True,
+            'Ec2KeyName' : 'wednesdaykp',
+            'EmrManagedMasterSecurityGroup': master_security_group_id,
+            'EmrManagedSlaveSecurityGroup': slave_security_group_id
+
+        },
+        BootstrapActions=[
+            {
+                'Name': 'Install boto3',
+                'ScriptBootstrapAction': {
+                            'Path': "s3://shibi-lz-07/misc/package.sh",
+                        }
+            }
+            ],
+        
+        JobFlowRole='EMR_EC2_DefaultRole',
+        ServiceRole='EMR_DefaultRole',
+        AutoTerminationPolicy = {"IdleTimeout": 3000},
+        VisibleToAllUsers=True,
+        Applications=[
+                { 'Name': 'hadoop' },
+                { 'Name': 'spark' },
+                { 'Name': 'hive' },
+                { 'Name': 'livy' },
+                { 'Name': 'jupyterhub' }
+            ]
+        )
+    print(cluster_response)    
+    return cluster_response['JobFlowId']
+
+def retrieve_cluster_dns(cluster_id):
+    emr = boto3.client('emr', region_name=region_name)
+    response = emr.describe_cluster(ClusterId=cluster_id)
+    return response['Cluster']['MasterPublicDnsName']
+
+def livy_code(dns,code_path):
+    host = 'http://' + dns + ':8998'
+    data = {"file": code_path, "className": "com.example.SparkApp"}
+    headers = {'Content-Type': 'application/json'}
+    r = requests.post(host + '/batches', data=json.dumps(data), headers=headers)
+    r.json()
+
+def pre_validation():
+    app_config=config()
+    for i in exist_list:
+        try:
+            lzs3, lzpath = fs.FileSystem.from_uri(app_config[i]['source']['data-location'])
+            lzcount = ds.dataset(lzpath, filesystem=lzs3, format='parquet').count_rows()
+        except:
+            continue
+        
+        rzs3, rzpath = fs.FileSystem.from_uri(app_config[i]['destination']['data-location'])
+        rzcount = ds.dataset(rzpath, filesystem=rzs3, format='parquet').count_rows()
+        
+        if rzcount!=lzcount:
+            raise Exception('Count mismatch with',i,'dataset')
+
+    print('Prevalidation is successful')
+        
+
+
+def livy_job():
+    spark_code_path = config()["livyjob"]
+    cluster_id = createEmrCluster()
+    waiting_for_cluster(cluster_id)
+    cluster_dns = retrieve_cluster_dns(cluster_id)
+    livy_code(cluster_dns,spark_code_path)
+
+
+def post_validation():
+    app_config=config()
+    # Count
+    for i in exist_list:
+        try:
+            rzs3, rzpath = fs.FileSystem.from_uri(app_config['final-'+i]['source']['data-location'])
+            rzcount = ds.dataset(rzpath, filesystem=rzs3, format='parquet').count_rows()
+        except:
+            continue
+        
+        szs3, szpath = fs.FileSystem.from_uri(app_config['final-'+i]['destination']['data-location'])
+        szcount = ds.dataset(szpath,partitioning='hive', filesystem=szs3, format='parquet').count_rows()
+
+        if rzcount!=szcount:
+            raise Exception('Count mismatch with '+i+' dataset, counts:'+rzcount+szcount)
+    print('Count matched successfully for both datasets')
+    # datatype
+    for i in exist_list:
+        try:
+            szs3, szpath = fs.FileSystem.from_uri(app_config['final-'+i]['destination']['data-location'])
+            df = ds.dataset(szpath,filesystem=szs3, format='parquet').to_table().to_pandas()
+        except:
+            continue
+        
+        cols=app_config['final-'+i]['transformation-cols']['cols'][:2]
+        print(cols)
+        for j in cols:
+            if isinstance(df[j][0],decimal.Decimal)!=True:
+                raise TypeError('Data type is not decimal in '+j+' column of '+i+' dataset')
+    print('Decimal datatypes match')
+    for i in exist_list:
+        try:
+            szs3, szpath = fs.FileSystem.from_uri(app_config['final-'+i]['destination']['data-location'])
+            df = ds.dataset(szpath,filesystem=szs3, format='parquet').to_table().to_pandas()
+        except:
+            continue
+        
+        col=app_config['final-'+i]['transformation-cols']['cols'][-1]
+        if df[col].dtype != object:
+            raise TypeError('Resultant data type was '+ str(df[col].dtype))
+
+    print('Postvalidation is successful')
+    
+    # table = dataset.to_table()
+exist_list=[]
+dummydag = DAG('Dummy_DAG', description='Creating Dummy DAG',
+schedule_interval='0 12 * * *',
+start_date=datetime(2022, 11, 20), catchup=False)
+config_data = PythonOperator(task_id='get_config_file', python_callable=config, dag=dummydag)
+landingtoraw = PythonOperator(task_id='read_write_data_s3', python_callable=landing_to_raw, dag=dummydag)
+prevalidation = PythonOperator(task_id='prevalidation', python_callable=pre_validation, dag=dummydag)
+livyjob = PythonOperator(task_id='livytransformation', python_callable=livy_job, dag=dummydag)
+postvalidation = PythonOperator(task_id='postvalidation', python_callable=post_validation, dag=dummydag)
+config_data >> landingtoraw >> prevalidation >> livyjob >> postvalidation

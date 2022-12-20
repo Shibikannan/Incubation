@@ -1,0 +1,92 @@
+from pyspark.sql.types import DecimalType,StringType
+from pyspark.sql import functions as f
+import json
+from pyspark.sql.functions import col, concat_ws,sha2
+from pyspark.sql import SparkSession
+from pyspark.conf import SparkConf
+import sys
+import pyspark.sql.utils
+spark = SparkSession.builder.appName('Transformation_Casting').getOrCreate()
+spark.sparkContext.addPyFile("s3://dharika-landing-zone-nv/Dependencies/delta-core_2.12-0.8.0.jar")
+from delta import *
+#Create a class with all required functions
+class spark_job: 
+    # Reading app configuration file from S3 and return config details 
+    def __init__(self):  
+        configData = spark.sparkContext.textFile("s3://dharika-landing-zone-nv/Configuration/app_configuration.json").collect()
+        data       = ''.join(configData)
+        self.config_details = json.loads(data)
+        self.datasets=['Actives','Viewership']
+    #Function for Reading the data from source
+    def read_data(self,path,format):
+        df=spark.read.parquet(path)
+        return df
+    # Function for writing the data to destination
+    def write(self,df, file_format,path):
+        print("writing")
+        try:
+            if file_format=="parquet":
+                df.write.format(file_format).save(path)
+            
+            elif file_format=="csv":
+                df.write.format(file_format).save(path)
+        except Exception as e:
+            return e 
+    def read_dataset_from_rawzone(self,path):
+        loc=path
+        #location = self.config_details['transformation-dataset']['source']['data-location']
+        data_format = self.config_details['transformation-dataset']['source']['file-format']
+        # Collecting destination and destination format for transfering data to staging zone
+        return self.read_data(loc,data_format)
+    #Reading viewership data from raw_zone
+    #Getting the columns to be casted and masked for actives 
+    data_casting = {}
+    data_masking = {}
+    #Getting the columns to be casted and masked for viewership  
+    #Defining the function for casting
+    def casting(self,casting_dict,df):
+        for item in casting_dict.keys():
+            if casting_dict[item].split(",")[0] == "DecimalType":
+                df = df.withColumn(item,df[item].cast(DecimalType(scale=int(casting_dict[item].split(",")[1]))))
+            elif casting_dict[item] == "StringType":
+                df = df.withColumn(item,f.concat_ws(",",f.col(item)))
+        return df
+    def cols_casting(self):
+        spark_job.data_casting = self.config_details['transformation-dataset']['transformation-cols'] 
+        spark_job.data_masking = self.config_details['transformation-dataset']['masking-cols']
+        return 
+    #Defining the function for masking   
+    def masking(self,df,col_list):
+        for column in col_list:
+            if column in df.columns:
+                print(df.columns)
+                df = df.withColumn("masked_"+column,f.sha2(f.col(column),256))
+        return df
+    def raw_to_staging_zone(self,masked_active,name):
+        # write active data to staging zone
+        print("ok")
+        masked_active.write.partitionBy(self.config_details["transformation-dataset"]["partition-cols"]).mode("overwrite").save(self.config_details["transformation-dataset"]["destination"]["data-location"]+name+"/")
+            #active_rawzone = spark_job.read_dataset_from_rawzone(i)
+            #active_rawzone=active_rawzone.withColumn('user_id',active_rawzone['user_id'].cast(StringType()))
+            #ypecasted_active = job.casting(spark_job.data_casting,active_rawzone)
+            #masked_active = job.masking(spark_job.data_masking,typecasted_active)
+            #job.raw_to_staging_zone(masked_active)
+job  = spark_job()
+datasets=['Actives','Viewership']
+for i in datasets:
+    path=job.find(i)
+    if i in path:
+        print(path)
+        try:
+            active_rawzone = job.read_dataset_from_rawzone(path)
+        except:
+            continue
+        active_rawzone.printSchema()
+        job.cols_casting()
+        typecasted_active = job.casting(spark_job.data_casting,active_rawzone)
+        masked_active = job.masking(typecasted_active,spark_job.data_masking)
+        #print(masked_active)
+        masked_active.printSchema()
+        job.raw_to_staging_zone(masked_active,i)
+        job.raw_to_staging_zone(df,i)
+        #masked_active.show(7)

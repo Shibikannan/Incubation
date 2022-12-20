@@ -1,0 +1,64 @@
+{
+    "actives":{
+        "source":{
+            "data-location":"s3://shibi-lz-07/Actives.parquet.snappy",
+            "file-format":"parquet"
+        },
+        "destination":{
+            "data-location":"s3://shibi-rz-07/actives",
+            "file-format":"parquet"
+        }
+    },
+    "final-actives":{
+        "source":{
+            "data-location":"s3://shibi-rz-07/actives",
+            "file-format":"parquet"
+        },
+        "destination":{
+            "data-location":"s3://shibi-sz-07/actives",
+            "file-format":"parquet"
+        },
+        "masking-cols":["advertising_id","user_id"],
+        "transformation-cols":{
+		 "cols":["user_latitude","user_longitude","location_source"],
+		 "precision":"7"
+        },
+	  "partition-cols":["month","date"]
+    },
+    "viewership":{
+        "source":{
+            "data-location":"s3://shibi-lz-07/Viewership.parquet.snappy",
+            "file-format":"parquet"
+        },
+        "destination":{
+            "data-location":"s3://shibi-rz-07/viewership",
+            "file-format":"parquet"
+        }
+    },
+    "final-viewership":{
+        "source":{
+            "data-location":"s3://shibi-rz-07/viewership",
+            "file-format":"parquet"
+        },
+        "destination":{
+            "data-location":"s3://shibi-sz-07/viewership",
+            "file-format":"parquet"
+        },
+        "masking-cols":["advertising_id"],
+        "transformation-cols":{
+		 "cols":["user_lat","user_long","location_source"],
+		 "precision":"7"
+        },
+	  "partition-cols":["month","date"]
+    },
+    "livyjob":"s3://shibi-lz-07/Spark-Job.py",
+    "lookup-dataset": {
+        "data-location-actives": "s3://shibi-sz-07/lookup_actives",
+        "data-location-viewership": "s3://shibi-sz-07/lookup_viewership",
+        "pii-cols-actives": ["advertising_id", "user_id"],
+        "pii-cols-viewership": ["advertising_id"]
+    }
+}
+
+
+

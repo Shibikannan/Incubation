@@ -1,0 +1,21 @@
+[
+    {
+        "Classification":"spark",
+        "Properties":{
+            "spark.path":"s3://shibi-lz-07/configuration/app-config.json",
+            "spark.master":"yarn",
+            "spark.submit.deployMode":"cluster",
+            "spark.driver.memory":"4g",
+            "spark.executor.memory":"2g",
+            "spark.driver.cores":"2",
+            "spark.executor.cores":"4",
+            "spark.dynamicAllocation.enabled":"true",
+            "spark.dynamicAllocation.initialExecutors":"8",
+            "spark.dynamicAllocation.minExecutors":"10",
+            "spark.hadoop.mapreduce.fileoutputcommitter.algorithm.version":"2",
+            "spark.hadoop.fs.s3a.block.size":"512M",
+		"spark.num-executors": "8"
+        },
+	"Configurations": []
+    }
+]
