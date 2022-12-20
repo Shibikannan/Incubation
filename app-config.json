@@ -51,7 +51,9 @@
         },
 	  "partition-cols":["month","date"]
     },
+    
     "livyjob":"s3://shibi-lz-07/Spark-Job.py",
+
     "lookup-dataset": {
         "data-location-actives": "s3://shibi-sz-07/lookup_actives",
         "data-location-viewership": "s3://shibi-sz-07/lookup_viewership",
