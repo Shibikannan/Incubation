@@ -38,7 +38,7 @@ class SparkJob:
             try:
                 data=data.withColumn("masked_"+column, sha2(data[column], 256))
             except:
-                raise Exception('column not found')
+                raise Exception('column not found ')
             print('masking is done')
         return data
     def transformation(self,data,precision,*columns):
