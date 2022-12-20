@@ -35,7 +35,10 @@ class SparkJob:
         return rawdata
     def masking(self,data,columns):
         for column in columns:
-            data=data.withColumn("masked_"+column, sha2(data[column], 256))
+            try:
+                data=data.withColumn("masked_"+column, sha2(data[column], 256))
+            except:
+                raise Exception('column not found')
             print('masking is done')
         return data
     def transformation(self,data,precision,*columns):
